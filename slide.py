@@ -11,6 +11,12 @@ from fractions import Fraction
 from sympy import symbols, Eq, solve, isprime
 import json
 import os
+import sys
+import uuid
+import math
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 x = symbols('x')
 
@@ -83,6 +89,8 @@ question_type = {
             ],
         "divide": [
             {"qty":20, "min": 1, "max": 20, "tiers": [3,4]}],
+        "area": [
+            {"qty":10, "min": 3, "max": 10, "tiers": [3,4]}],
         "place_value_reverse": [
             {"qty":20, "min": 100, "max": 9999, "tiers": [4,5], "fontsize": 80}],
     },
@@ -108,6 +116,8 @@ question_type = {
             ],
         "divide": [
             {"qty":20, "min": 2, "max": 100, "tiers": [3,4,5]}],
+        "area": [
+            {"qty":10, "min": 4, "max": 12, "tiers": [3,4,5]}],
         "place_value_reverse": [
             {"qty":20, "min": 10, "max": 9999, "tiers": [3,4], "fontsize": 70}],
     },
@@ -157,6 +167,10 @@ question_type = {
             ],
         "divide": [
             {"qty":15, "min": 2, "max": 40, "tiers": [4,5]}],
+        "area": [
+            {"qty":10, "min": 5, "max": 15, "tiers": [4,5]}],
+        "missing_angle_triangle": [
+            {"qty":8, "min": 1, "max": 10, "tiers": [3,4,5]}],
         "place_value_reverse": [
             {"qty":15, "min": 1000, "max": 99999, "tiers": [3,4,5], "fontsize": 70}],
         "add_fraction_same_denominator": [
@@ -187,6 +201,8 @@ question_type = {
             {"qty":10, "min": 2, "max": 80, "tiers": [4,5]}],
         "place_value_reverse": [
             {"qty":15, "min": 1000, "max": 99999, "tiers": [3,4,5], "fontsize": 70}],
+        "missing_angle_triangle": [
+            {"qty":8, "min": 1, "max": 10, "tiers": [3,4,5]}],
         "add_fraction_same_denominator": [
             {"qty":10, "min": 2, "max": 9, "tiers": [3]}],
         "add_fraction_different_denominator": [
@@ -416,6 +432,131 @@ def add_textbox(slide, text, left, top, width, height, default_font_size=44,
 
     return textbox
 
+
+def draw_area_shape(slide, shape_info, left, top, display_width, display_height):
+    """Draw a rectangle or triangle and label its dimensions."""
+    width_value = shape_info.get("width") or shape_info.get("base")
+    height_value = shape_info["height"]
+    max_value = max(width_value, height_value, 1)
+
+    shape_width = display_width * (width_value / max_value)
+    shape_height = display_height * (height_value / max_value)
+    shape_left = left + (display_width - shape_width) / 2
+    shape_top = top + (display_height - shape_height) / 2
+
+    if shape_info["shape"] == "rectangle":
+        shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, shape_left, shape_top, shape_width, shape_height)
+    else:
+        shape = slide.shapes.add_shape(MSO_SHAPE.RIGHT_TRIANGLE, shape_left, shape_top, shape_width, shape_height)
+
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = RGBColor(240, 240, 255)
+    shape.line.color.rgb = RGBColor(0, 0, 0)
+    shape.line.width = Pt(2)
+
+    if shape_info["shape"] == "rectangle":
+        add_textbox(slide, f"{width_value} cm", shape_left, shape_top + shape_height + Inches(0.1), shape_width, Inches(0.4), default_font_size=24, align=PP_ALIGN.CENTER)
+        add_textbox(slide, f"{height_value} cm", shape_left - Inches(0.9), shape_top, Inches(0.9), shape_height, default_font_size=24, align=PP_ALIGN.CENTER)
+    else:
+        add_textbox(slide, f"{shape_info['base']} cm", shape_left, shape_top + shape_height + Inches(0.1), shape_width, Inches(0.4), default_font_size=24, align=PP_ALIGN.CENTER)
+        add_textbox(slide, f"{height_value} cm", shape_left - Inches(0.9), shape_top, Inches(0.9), shape_height, default_font_size=24, align=PP_ALIGN.CENTER)
+
+
+def draw_triangle_angle(slide, qinfo, left, top, display_width, display_height, show_answer=False):
+    """Render a triangle using matplotlib, annotate angles and insert into slide.
+
+    qinfo: {"angles": [a1,a2,a3], "missing_index": i}
+    """
+    angles = qinfo.get("angles", [60,60,60])
+    missing_index = qinfo.get("missing_index", 2)
+
+    # Convert to radians
+    a_rad = math.radians(angles[0])
+    b_rad = math.radians(angles[1])
+    c_rad = math.radians(angles[2])
+
+    # Use base AB = 1.0
+    c_len = 1.0
+    # By law of sines: a/sin(A)=b/sin(B)=c/sin(C)=scale
+    scale = c_len / math.sin(c_rad)
+    a_len = math.sin(a_rad) * scale  # side opposite A (BC)
+    b_len = math.sin(b_rad) * scale  # side opposite B (AC)
+
+    # Coordinates: A at (0,0), B at (c_len,0). Find C such that AC=b_len, BC=a_len
+    # x coordinate from A: x = (b^2 + c^2 - a^2)/(2c)
+    x = (b_len*b_len + c_len*c_len - a_len*a_len) / (2*c_len)
+    y_sq = max(0.0, b_len*b_len - x*x)
+    y = math.sqrt(y_sq)
+
+    # Build polygon coordinates
+    A = (0.0, 0.0)
+    B = (c_len, 0.0)
+    C = (x, y)
+    xs = [A[0], B[0], C[0], A[0]]
+    ys = [A[1], B[1], C[1], A[1]]
+
+    # Convert display sizes (pptx Inches) to float inches if possible
+    try:
+        dw = float(display_width.inches)
+    except Exception:
+        try:
+            dw = float(display_width)
+        except Exception:
+            dw = 5.0
+    try:
+        dh = float(display_height.inches)
+    except Exception:
+        try:
+            dh = float(display_height)
+        except Exception:
+            dh = 3.0
+
+    # Limit figure size to reasonable bounds to avoid huge image buffers
+    fig_w = max(3.0, min(dw, 6.0))
+    fig_h = max(3.0, min(dh, 4.0))
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=100)
+    ax = fig.add_subplot(111)
+    ax.fill(xs, ys, color="#F0F0FF", edgecolor="black")
+    ax.plot(xs, ys, color="black")
+
+    # Annotate angles
+    label_offsets = [(-0.08, -0.08), (0.03, -0.08), (0.0, 0.02)]
+    for idx, (vx, vy) in enumerate([A, B, C]):
+        if idx == missing_index and not show_answer:
+            label = "?"
+        else:
+            label = f"{angles[idx]}°"
+        ox, oy = label_offsets[idx]
+        ax.text(vx + ox, vy + oy, label, fontsize=14, weight='bold')
+
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    img_dir = os.path.join(os.getcwd(), 'temp_images')
+    os.makedirs(img_dir, exist_ok=True)
+    img_path = os.path.join(img_dir, f"triangle_{uuid.uuid4().hex}.png")
+    fig.savefig(img_path, bbox_inches='tight', dpi=150)
+    plt.close(fig)
+
+    # Insert image into slide
+    try:
+        slide.shapes.add_picture(img_path, left, top, width=display_width, height=display_height)
+    except Exception:
+        # Fallback: add without sizing
+        slide.shapes.add_picture(img_path, left, top)
+    return img_path
+
+def format_question_summary(question):
+    if isinstance(question, dict) and question.get("type") == "area":
+        if question["shape"] == "rectangle":
+            return f"Rectangle area with width {question['width']} cm and height {question['height']} cm"
+        return f"Triangle area with base {question['base']} cm and height {question['height']} cm"
+    if isinstance(question, dict) and question.get("type") == "triangle_angle":
+        missing = question.get('missing_index', 2)
+        return f"Triangle with one missing angle (angle {missing+1} to find)"
+    return question
+
+
 def generate_number(min_val, max_val, tier, tier_range):
     """Generate a number scaled by tier difficulty, including min_val and max_val."""
     # Total number of tiers
@@ -525,6 +666,52 @@ def generate_question(op_type, min_val, max_val, tier, tier_range):
         answer = a + b + c
         return question, f"{answer:,}"
       
+    elif op_type == "area":
+        shape = random.choice(["rectangle", "triangle"])
+        if shape == "rectangle":
+            width_val = generate_number(min_val, max_val, tier, tier_range)
+            height_val = generate_number(min_val, max_val, tier, tier_range)
+            question = {
+                "type": "area",
+                "shape": "rectangle",
+                "width": width_val,
+                "height": height_val,
+            }
+            answer = width_val * height_val
+            return question, f"{answer} cm²"
+
+        base = generate_number(min_val, max_val, tier, tier_range)
+        height_val = generate_number(min_val, max_val, tier, tier_range)
+        while (base * height_val) % 2 != 0:
+            height_val = generate_number(min_val, max_val, tier, tier_range)
+        area = (base * height_val) // 2
+        question = {
+            "type": "area",
+            "shape": "triangle",
+            "base": base,
+            "height": height_val,
+        }
+        return question, f"{area} cm²"
+
+    # --- Missing angle in a triangle ---
+    elif op_type == "missing_angle_triangle":
+        # Generate two angles such that the third is positive
+        while True:
+            a1 = random.randint(20, 80)
+            a2 = random.randint(20, 80)
+            if a1 + a2 < 170:
+                break
+        a3 = 180 - (a1 + a2)
+        angles = [a1, a2, a3]
+        missing_index = random.choice([0, 1, 2])
+        q = {
+            "type": "triangle_angle",
+            "angles": angles,
+            "missing_index": missing_index,
+        }
+        answer = f"{angles[missing_index]}°"
+        return q, answer
+
     elif op_type == "add_dec1":  # New operation for adding decimals
         a = generate_number(min_val*10, max_val*10, tier, tier_range) / 10
         b = generate_number(min_val*10, max_val*10, tier, tier_range) / 10
@@ -712,9 +899,10 @@ def generate_question_set(question_type, level):
                     for attempt in range(max_attempts):
                         question, answer = generate_question(op_type, min_val, max_val, tier, tiers)
                         if question and answer:
+                            question_key = json.dumps(question, sort_keys=True) if isinstance(question, dict) else question
                             # Check if question is unique for this op_type, config, and tier
-                            if question not in seen_questions[op_type][config_idx][tier]:
-                                seen_questions[op_type][config_idx][tier].add(question)
+                            if question_key not in seen_questions[op_type][config_idx][tier]:
+                                seen_questions[op_type][config_idx][tier].add(question_key)
                                 questions_by_tier[tier].append((question, answer, tier, fontsize))
                                 break
                             # If duplicate, try again
@@ -765,7 +953,7 @@ def main():
 
         questions = generate_question_set(question_type, level)
         for i, (question, answer, tier, fontsize) in enumerate(questions, 1):
-            print(f"T{tier}Q{i}: {question} = {answer}")
+            sys.stdout.buffer.write((f"T{tier}Q{i}: {format_question_summary(question)} = {answer}\n").encode('utf-8', errors='replace'))
             if tier != prev_tier:
                 tier_count = sum(1 for _, _, t, _ in questions if t == tier)
                 # --- Create a Tier slide ---
@@ -781,24 +969,38 @@ def main():
             # Footer text
             add_textbox(slide_q, f"QUESTION {question_number} of {tier_count}", Inches(0.2), prs.slide_height-Inches(1), Inches(3), Inches(1), default_font_size=18, align=PP_ALIGN.LEFT, default_color=COLOR_MAP['dark_gray'])
             # Question Text ---
-            q_box = add_textbox(slide_q, question, left, top, width, height, default_font_size=fontsize)
+            if isinstance(question, dict) and question.get("type") == "area":
+                q_box = add_textbox(slide_q, "Find the area of the shape. Use the numbers shown.", left, Inches(0.6), width, Inches(1.0), default_font_size=48)
+                draw_area_shape(slide_q, question, left + Inches(1.0), Inches(1.8), Inches(5), Inches(3))
+            elif isinstance(question, dict) and question.get("type") == "triangle_angle":
+                q_box = add_textbox(slide_q, "Find the missing angle in the triangle.", left, Inches(0.6), width, Inches(1.0), default_font_size=48)
+                draw_triangle_angle(slide_q, question, left + Inches(1.0), Inches(1.8), Inches(5), Inches(3), show_answer=False)
+            else:
+                q_box = add_textbox(slide_q, question, left, top, width, height, default_font_size=fontsize)
             # Tier information
             t_box = add_textbox(slide_q, f"Round {tier}", prs.slide_width-Inches(3), prs.slide_height-Inches(1), Inches(3), Inches(1), default_font_size=18, align=PP_ALIGN.RIGHT, valign=MSO_ANCHOR.BOTTOM)
             t_box.text_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(180, 180, 180)  # Gray text
             # Add an image (adjust path and size as needed)
             img_path = 'spin_clock.webp'  # e.g. 'my_image.png'
-            # Insert image
-            slide_q.shapes.add_picture(img_path, left=width-Inches(0.7), top=Inches(0.1), height=Inches(1))
+            if os.path.exists(img_path):
+                slide_q.shapes.add_picture(img_path, left=width-Inches(0.7), top=Inches(0.1), height=Inches(1))
 
             # --- Answer Slide ---
             slide_a = prs.slides.add_slide(prs.slide_layouts[6])  # Blank slide
             # Set background color
             set_slide_background(slide_a, 155, 255, 200)
             # Show the question in small text at the top
-            clean_question = question.replace('\n', ' ')
+            clean_question = format_question_summary(question)
             add_textbox(slide_a, f"Q. {clean_question}", left=left, top=Inches(0.3), width=width, height=Inches(1), default_font_size=38)
-            # Show the answer
-            a_box = add_textbox(slide_a, answer, left=left, top=Inches(2.5), width=width, height=Inches(2), default_font_size=120)
+            if isinstance(question, dict) and question.get("type") == "area":
+                draw_area_shape(slide_a, question, left + Inches(1.0), Inches(1.4), Inches(5), Inches(3))
+                a_box = add_textbox(slide_a, answer, left, Inches(4.7), width, Inches(0.7), default_font_size=80)
+            elif isinstance(question, dict) and question.get("type") == "triangle_angle":
+                # Show triangle with the missing angle revealed and show numeric answer
+                draw_triangle_angle(slide_a, question, left + Inches(1.0), Inches(1.4), Inches(5), Inches(3), show_answer=True)
+                a_box = add_textbox(slide_a, answer, left, Inches(4.7), width, Inches(0.7), default_font_size=80)
+            else:
+                a_box = add_textbox(slide_a, answer, left=left, top=Inches(2.5), width=width, height=Inches(2), default_font_size=120)
             a_box.text_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(0, 176, 80)  # Green text
             # Show the question #
             add_textbox(slide_a, f"Answer {question_number} of {tier_count}", 
