@@ -20,8 +20,10 @@ import matplotlib.pyplot as plt
 
 x = symbols('x')
 
-levels_to_generate = [1,2,3,4,5,6,7,8,9]
-# levels_to_generate = [9]
+# levels_to_generate = [1,2,3,4,5,6,7,8,9]
+levels_to_generate = [6]
+SHAPE_LABEL_FONT_SIZE = 28   # Font size for dimension/angle labels on all shapes
+SHAPE_LABEL_FONT_WEIGHT = 'bold'  # Font weight for dimension/angle labels on all shapes
 # Simple color name to RGB map
 COLOR_MAP = {
     "black": RGBColor(0, 0, 0),
@@ -435,6 +437,8 @@ def add_textbox(slide, text, left, top, width, height, default_font_size=44,
 
 def draw_area_shape(slide, shape_info, left, top, display_width, display_height):
     """Draw a rectangle or triangle and label its dimensions."""
+    label_font_size = SHAPE_LABEL_FONT_SIZE
+
     width_value = shape_info.get("width") or shape_info.get("base")
     height_value = shape_info["height"]
     max_value = max(width_value, height_value, 1)
@@ -455,11 +459,11 @@ def draw_area_shape(slide, shape_info, left, top, display_width, display_height)
     shape.line.width = Pt(2)
 
     if shape_info["shape"] == "rectangle":
-        add_textbox(slide, f"{width_value} cm", shape_left, shape_top + shape_height + Inches(0.1), shape_width, Inches(0.4), default_font_size=24, align=PP_ALIGN.CENTER)
-        add_textbox(slide, f"{height_value} cm", shape_left - Inches(0.9), shape_top, Inches(0.9), shape_height, default_font_size=24, align=PP_ALIGN.CENTER)
+        add_textbox(slide, f"{width_value} cm", shape_left, shape_top + shape_height + Inches(0.1), shape_width, Inches(0.4), default_font_size=label_font_size, align=PP_ALIGN.CENTER)
+        add_textbox(slide, f"{height_value} cm", shape_left - Inches(0.9), shape_top, Inches(0.9), shape_height, default_font_size=label_font_size, align=PP_ALIGN.CENTER)
     else:
-        add_textbox(slide, f"{shape_info['base']} cm", shape_left, shape_top + shape_height + Inches(0.1), shape_width, Inches(0.4), default_font_size=24, align=PP_ALIGN.CENTER)
-        add_textbox(slide, f"{height_value} cm", shape_left - Inches(0.9), shape_top, Inches(0.9), shape_height, default_font_size=24, align=PP_ALIGN.CENTER)
+        add_textbox(slide, f"{shape_info['base']} cm", shape_left, shape_top + shape_height + Inches(0.1), shape_width, Inches(0.4), default_font_size=label_font_size, align=PP_ALIGN.CENTER)
+        add_textbox(slide, f"{height_value} cm", shape_left - Inches(0.9), shape_top, Inches(0.9), shape_height, default_font_size=label_font_size, align=PP_ALIGN.CENTER)
 
 
 def draw_triangle_angle(slide, qinfo, left, top, display_width, display_height, show_answer=False):
@@ -519,15 +523,23 @@ def draw_triangle_angle(slide, qinfo, left, top, display_width, display_height, 
     ax.fill(xs, ys, color="#F0F0FF", edgecolor="black")
     ax.plot(xs, ys, color="black")
 
-    # Annotate angles
-    label_offsets = [(-0.08, -0.08), (0.03, -0.08), (0.0, 0.02)]
+    # Annotate angles — offset each label away from the triangle centroid
+    centroid_x = (A[0] + B[0] + C[0]) / 3
+    centroid_y = (A[1] + B[1] + C[1]) / 3
+    offset_dist = 0.12  # distance to push label away from vertex, in data units
     for idx, (vx, vy) in enumerate([A, B, C]):
         if idx == missing_index and not show_answer:
             label = "?"
         else:
             label = f"{angles[idx]}°"
-        ox, oy = label_offsets[idx]
-        ax.text(vx + ox, vy + oy, label, fontsize=14, weight='bold')
+        # Direction from centroid to vertex (outward)
+        dx = vx - centroid_x
+        dy = vy - centroid_y
+        length = math.sqrt(dx * dx + dy * dy) or 1.0
+        ox = (dx / length) * offset_dist
+        oy = (dy / length) * offset_dist
+        ax.text(vx + ox, vy + oy, label, fontsize=SHAPE_LABEL_FONT_SIZE, weight=SHAPE_LABEL_FONT_WEIGHT,
+                ha='center', va='center')
 
     ax.set_aspect('equal')
     ax.axis('off')
@@ -535,14 +547,28 @@ def draw_triangle_angle(slide, qinfo, left, top, display_width, display_height, 
     img_dir = os.path.join(os.getcwd(), 'temp_images')
     os.makedirs(img_dir, exist_ok=True)
     img_path = os.path.join(img_dir, f"triangle_{uuid.uuid4().hex}.png")
-    fig.savefig(img_path, bbox_inches='tight', dpi=150)
+    fig.savefig(img_path, bbox_inches='tight', dpi=150, transparent=True)
     plt.close(fig)
+
+    # Fit image within display_width x display_height, preserving aspect ratio
+    from PIL import Image as PILImage
+    with PILImage.open(img_path) as im:
+        img_w, img_h = im.size
+
+    img_aspect = img_w / img_h
+    fitted_w = display_width
+    fitted_h = display_width / img_aspect
+    if fitted_h > display_height:
+        fitted_h = display_height
+        fitted_w = display_height * img_aspect
+
+    offset_x = left + (display_width - fitted_w) / 2
+    offset_y = top + (display_height - fitted_h) / 2
 
     # Insert image into slide
     try:
-        slide.shapes.add_picture(img_path, left, top, width=display_width, height=display_height)
+        slide.shapes.add_picture(img_path, offset_x, offset_y, width=fitted_w, height=fitted_h)
     except Exception:
-        # Fallback: add without sizing
         slide.shapes.add_picture(img_path, left, top)
     return img_path
 
@@ -970,11 +996,11 @@ def main():
             add_textbox(slide_q, f"QUESTION {question_number} of {tier_count}", Inches(0.2), prs.slide_height-Inches(1), Inches(3), Inches(1), default_font_size=18, align=PP_ALIGN.LEFT, default_color=COLOR_MAP['dark_gray'])
             # Question Text ---
             if isinstance(question, dict) and question.get("type") == "area":
-                q_box = add_textbox(slide_q, "Find the area of the shape. Use the numbers shown.", left, Inches(0.6), width, Inches(1.0), default_font_size=48)
-                draw_area_shape(slide_q, question, left + Inches(1.0), Inches(1.8), Inches(5), Inches(3))
+                q_box = add_textbox(slide_q, "Find the area of the shape. Use the numbers shown.", left, Inches(0.6), width, Inches(1.0), default_font_size=38)
+                draw_area_shape(slide_q, question, (prs.slide_width - Inches(7)) / 2, Inches(1.8), Inches(7), Inches(3))
             elif isinstance(question, dict) and question.get("type") == "triangle_angle":
-                q_box = add_textbox(slide_q, "Find the missing angle in the triangle.", left, Inches(0.6), width, Inches(1.0), default_font_size=48)
-                draw_triangle_angle(slide_q, question, left + Inches(1.0), Inches(1.8), Inches(5), Inches(3), show_answer=False)
+                q_box = add_textbox(slide_q, "Find the missing angle in the triangle.", left, Inches(0.6), width, Inches(1.0), default_font_size=38)
+                draw_triangle_angle(slide_q, question, (prs.slide_width - Inches(7)) / 2, (prs.slide_height - Inches(3)) / 2 + Inches(0.5), Inches(7), Inches(3), show_answer=False)
             else:
                 q_box = add_textbox(slide_q, question, left, top, width, height, default_font_size=fontsize)
             # Tier information
@@ -993,11 +1019,11 @@ def main():
             clean_question = format_question_summary(question)
             add_textbox(slide_a, f"Q. {clean_question}", left=left, top=Inches(0.3), width=width, height=Inches(1), default_font_size=38)
             if isinstance(question, dict) and question.get("type") == "area":
-                draw_area_shape(slide_a, question, left + Inches(1.0), Inches(1.4), Inches(5), Inches(3))
+                draw_area_shape(slide_a, question, (prs.slide_width - Inches(7)) / 2, Inches(1.4), Inches(7), Inches(3))
                 a_box = add_textbox(slide_a, answer, left, Inches(4.7), width, Inches(0.7), default_font_size=80)
             elif isinstance(question, dict) and question.get("type") == "triangle_angle":
                 # Show triangle with the missing angle revealed and show numeric answer
-                draw_triangle_angle(slide_a, question, left + Inches(1.0), Inches(1.4), Inches(5), Inches(3), show_answer=True)
+                draw_triangle_angle(slide_a, question, (prs.slide_width - Inches(7)) / 2, (prs.slide_height - Inches(3)) / 2 + Inches(0.5), Inches(7), Inches(3), show_answer=True)
                 a_box = add_textbox(slide_a, answer, left, Inches(4.7), width, Inches(0.7), default_font_size=80)
             else:
                 a_box = add_textbox(slide_a, answer, left=left, top=Inches(2.5), width=width, height=Inches(2), default_font_size=120)
